@@ -1,0 +1,76 @@
+# Create a jumphost instance in the specified ZONE using e2-micro machine type and Debian Linux image
+gcloud compute instances create INSTANCE_NAME \
+    --zone=ZONE \
+    --machine-type=e2-micro \
+    --image-family=debian-11 \
+    --image-project=debian-cloud
+
+
+# Create an instance template with e2-medium machine type and startup script
+gcloud compute instance-templates create nginx-template \
+    --machine-type=e2-medium \
+    --metadata=startup-script='#! /bin/bash
+    apt-get update
+    apt-get install -y nginx
+    service nginx start
+    sed -i -- "s/nginx/Google Cloud Platform - \$HOSTNAME/" /var/www/html/index.nginx-debian.html'
+
+
+# Create a managed instance group with 2 instances based on the template
+gcloud compute instance-groups managed create nginx-group \
+    --base-instance-name nginx \
+    --template=nginx-template \
+    --size=2 \
+    --zone=us-west1-b
+
+
+# Create a firewall rule to allow traffic on TCP port 80
+gcloud compute firewall-rules create FIREWALL_RULE_NAME \
+    --allow tcp:80 \
+    --target-tags=http-server \
+    --description="Allow HTTP traffic on port 80"
+
+
+# Create a health check for the backend service
+gcloud compute health-checks create http nginx-health-check \
+    --port 80
+
+# gcloud compute instance-groups managed \
+      set-named-ports nginx-group \
+      --named-ports http:80 \
+      --region us-west1
+
+
+# Create the backend service and add the instance group
+gcloud compute backend-services create nginx-backend-service \
+    --protocol=HTTP \
+    --port-name=http \
+    --health-checks=nginx-health-check \
+    --global
+
+# Add the managed instance group to the backend service
+gcloud compute backend-services add-backend nginx-backend-service \
+    --instance-group=nginx-group \
+    --instance-group-zone=us-west1-b \
+    --global
+
+
+# Create a URL map that points to the backend service
+gcloud compute url-maps create web-map-http \
+    --default-service=nginx-backend-service
+
+
+# Create a target HTTP proxy to route traffic to the URL map
+gcloud compute target-http-proxies create http-lb-proxy \
+    --url-map=web-map-http
+
+
+# Create a forwarding rule to handle HTTP traffic on port 80
+gcloud compute forwarding-rules create http-forwarding-rule \
+    --global \
+    --target-http-proxy=http-lb-proxy \
+    --ports=80
+
+
+# To verify the setup, you can retrieve the external IP address of the load balancer:
+gcloud compute forwarding-rules list --global
